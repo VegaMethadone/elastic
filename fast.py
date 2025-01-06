@@ -1,7 +1,6 @@
 from elasticsearch import Elasticsearch, helpers
 import json
 from tqdm import tqdm
-from pymystem3 import Mystem # https://github.com/nlpub/pymystem3
 
 INDEX_NAME = "wikipedia_paragraphs"
 INDEX_NAME_MORF = "wikipedia_morphologic"
@@ -45,6 +44,7 @@ def create_index(es):
         print(f"Индекс {INDEX_NAME} уже существует.")
 
 
+
 def create_index_with_morphological_preprocessing(es):
     if not es.indices.exists(index=INDEX_NAME_MORF):
         resp = es.indices.create(
@@ -53,16 +53,6 @@ def create_index_with_morphological_preprocessing(es):
                 "settings": {
                     "analysis": {
                         "filter": {
-                            "russian_stop": {
-                                "type": "stop",
-                                "stopwords": "_russian_"
-                            },
-                            "russian_keywords": {
-                                "type": "keyword_marker",
-                                "keywords": [
-                                    "пример"
-                                ]
-                            },
                             "russian_stemmer": {
                                 "type": "stemmer",
                                 "language": "russian"
@@ -73,8 +63,6 @@ def create_index_with_morphological_preprocessing(es):
                                 "tokenizer": "standard",
                                 "filter": [
                                     "lowercase",
-                                    "russian_stop",
-                                    "russian_keywords",
                                     "russian_stemmer"
                                 ]
                             }
@@ -96,17 +84,28 @@ def create_index_with_morphological_preprocessing(es):
 
 
 
-
 def contains(target, arr):
     return target in arr
 
 
-def prepare_data(query, is_morfologic):
+def prepare_data(es, query, is_morfologic):
 
     if is_morfologic:
-        m = Mystem()
-        lemmas = m.lemmatize(query)
-        query = "".join(lemmas)
+        resp = es.indices.analyze(
+        index=INDEX_NAME_MORF,
+        body={
+            "analyzer": "rebuilt_russian",
+            "text": query
+        }
+        )
+        res = ""
+        target = resp["tokens"]
+        for i, token_obj in enumerate(target):
+            res += token_obj["token"]
+            if i < len(target) - 1:
+                res += " "
+
+        query = res
     
     return {
         "query": {
@@ -123,6 +122,7 @@ def test_queries(es, test_data, amount_docs, index, is_morfologic = False):
 
     # Precision P  = tp / (tp + fp)
     # Recall R = tp / (tp + fn)
+    # RR = 1 / first occurance
 
     precision = []
     recall = []
@@ -139,7 +139,7 @@ def test_queries(es, test_data, amount_docs, index, is_morfologic = False):
         if  len(with_answer) == 0:
             continue
         
-        results = es.search(index=index, body=prepare_data(query, is_morfologic))
+        results = es.search(index=index, body=prepare_data(es, query, is_morfologic))
 
         size = 5 # размер запроса
         ctp = 0 # кол. релевантных документов для данного запроса
@@ -194,6 +194,7 @@ def main():
 
     resp1 = es.count(index=INDEX_NAME)
     resp2 = es.count(index=INDEX_NAME_MORF)
+
 
     print(f"Количество записей в индексе {INDEX_NAME}: {resp1['count']}")
     print(f"Количество записей в индексе {INDEX_NAME_MORF}: {resp2['count']}\n")
